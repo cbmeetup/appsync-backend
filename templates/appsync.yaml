@@ -1,0 +1,133 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Description: AppSync backend for storing attendance of AWS User Group meetups
+
+Resources:
+  GraphQLApi:
+    Type: AWS::AppSync::GraphQLApi
+    Properties:
+      Name: Meetups
+      AuthenticationType: OPENID_CONNECT
+      OpenIDConnectConfig:
+        Issuer: "https://leonrodenburg.eu.auth0.com/"
+        ClientId: HNB4povCl5Sxy3Ci9ZNiHhLlV5uCvKBx
+
+  AttendanceDynamoTable:
+    Type: AWS::DynamoDB::Table
+    Properties:
+      BillingMode: PAY_PER_REQUEST
+      KeySchema:
+        - AttributeName: slug
+          KeyType: HASH
+        - AttributeName: userId
+          KeyType: RANGE
+      AttributeDefinitions:
+        - AttributeName: slug
+          AttributeType: S
+        - AttributeName: userId
+          AttributeType: S
+      SSESpecification:
+        SSEEnabled: true
+
+  AttendanceDynamoDataSourceRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: "Allow"
+            Principal:
+              Service:
+                - "appsync.amazonaws.com"
+            Action:
+              - "sts:AssumeRole"
+      Policies:
+        - PolicyName: "appsync-policy"
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Effect: "Allow"
+                Action:
+                  - "dynamodb:Scan"
+                  - "dynamodb:Query"
+                  - "dynamodb:GetItem"
+                  - "dynamodb:PutItem"
+                  - "dynamodb:UpdateItem"
+                  - "dynamodb:DeleteItem"
+                Resource: !GetAtt AttendanceDynamoTable.Arn
+
+  AttendanceDynamoDataSource:
+    Type: AWS::AppSync::DataSource
+    Properties:
+      ApiId: !GetAtt GraphQLApi.ApiId
+      Type: AMAZON_DYNAMODB
+      Name: attendance_dynamo
+      ServiceRoleArn: !GetAtt AttendanceDynamoDataSourceRole.Arn
+      DynamoDBConfig:
+        TableName: !Ref AttendanceDynamoTable
+        AwsRegion: eu-west-1
+
+  AttendanceGraphQLSchema:
+    Type: AWS::AppSync::GraphQLSchema
+    Properties:
+      ApiId: !GetAtt GraphQLApi.ApiId
+      Definition: |
+        schema {
+          query: Query
+          mutation: Mutation
+        }
+
+        type Query {
+          getAttendance(slug: ID!): Attendance
+        }
+
+        type Mutation {
+          attendMeetup(slug: ID!): Attendance
+        }
+
+        type Attendance {
+          slug: ID!
+          userId: ID!
+        }
+
+  AttendMeetupMutationResolver:
+    Type: AWS::AppSync::Resolver
+    DependsOn:
+      - AttendanceGraphQLSchema
+    Properties:
+      ApiId: !GetAtt GraphQLApi.ApiId
+      TypeName: Mutation
+      FieldName: attendMeetup
+      DataSourceName: !GetAtt AttendanceDynamoDataSource.Name
+      RequestMappingTemplate: |
+        {
+            "version" : "2017-02-28",
+            "operation" : "PutItem",
+            "key" : {
+                "slug": $util.dynamodb.toDynamoDBJson($ctx.args.slug),
+                "userId": $util.dynamodb.toDynamoDBJson($ctx.identity.sub)
+            },
+            "attributeValues" : $util.dynamodb.toMapValuesJson($ctx.args)
+        }
+      ResponseMappingTemplate: |
+        $util.toJson($ctx.result)
+
+  GetAttendanceQueryResolver:
+    Type: AWS::AppSync::Resolver
+    DependsOn:
+      - AttendanceGraphQLSchema
+    Properties:
+      ApiId: !GetAtt GraphQLApi.ApiId
+      TypeName: Query
+      FieldName: getAttendance
+      DataSourceName: !GetAtt AttendanceDynamoDataSource.Name
+      RequestMappingTemplate: |
+        {
+            "version" : "2017-02-28",
+            "operation" : "GetItem",
+            "key" : {
+                "slug": $util.dynamodb.toDynamoDBJson($ctx.args.slug),
+                "userId": $util.dynamodb.toDynamoDBJson($ctx.identity.sub)
+            }
+        }
+      ResponseMappingTemplate: |
+        $util.toJson($ctx.result)
