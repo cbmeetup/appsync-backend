@@ -81,12 +81,14 @@ Resources:
         }
 
         type Mutation {
-          attendMeetup(slug: ID!): Attendance
+          attendMeetup(slug: ID!): Attendance!
+          cancelAttendance(slug: ID!): Boolean
         }
 
         type Attendance {
           slug: ID!
           userId: ID!
+          signupDatetime: String!
         }
 
   AttendMeetupMutationResolver:
@@ -99,17 +101,42 @@ Resources:
       FieldName: attendMeetup
       DataSourceName: !GetAtt AttendanceDynamoDataSource.Name
       RequestMappingTemplate: |
+        #set($attributes = {
+          "signupDatetime": $util.time.nowISO8601()
+        })
+
         {
-            "version" : "2017-02-28",
-            "operation" : "PutItem",
-            "key" : {
-                "slug": $util.dynamodb.toDynamoDBJson($ctx.args.slug),
-                "userId": $util.dynamodb.toDynamoDBJson($ctx.identity.sub)
-            },
-            "attributeValues" : $util.dynamodb.toMapValuesJson($ctx.args)
+          "version" : "2017-02-28",
+          "operation" : "PutItem",
+          "key" : {
+            "slug": $util.dynamodb.toDynamoDBJson($ctx.args.slug),
+            "userId": $util.dynamodb.toDynamoDBJson($ctx.identity.sub)
+          },
+          "attributeValues": $util.dynamodb.toMapValuesJson($attributes)
         }
       ResponseMappingTemplate: |
         $util.toJson($ctx.result)
+
+  CancelAttendanceMutationResolver:
+    Type: AWS::AppSync::Resolver
+    DependsOn:
+      - AttendanceGraphQLSchema
+    Properties:
+      ApiId: !GetAtt GraphQLApi.ApiId
+      TypeName: Mutation
+      FieldName: cancelAttendance
+      DataSourceName: !GetAtt AttendanceDynamoDataSource.Name
+      RequestMappingTemplate: |
+        {
+          "version" : "2017-02-28",
+          "operation" : "DeleteItem",
+          "key" : {
+            "slug": $util.dynamodb.toDynamoDBJson($ctx.args.slug),
+            "userId": $util.dynamodb.toDynamoDBJson($ctx.identity.sub)
+          }
+        }
+      ResponseMappingTemplate: |
+        true
 
   GetAttendanceQueryResolver:
     Type: AWS::AppSync::Resolver
@@ -122,12 +149,12 @@ Resources:
       DataSourceName: !GetAtt AttendanceDynamoDataSource.Name
       RequestMappingTemplate: |
         {
-            "version" : "2017-02-28",
-            "operation" : "GetItem",
-            "key" : {
-                "slug": $util.dynamodb.toDynamoDBJson($ctx.args.slug),
-                "userId": $util.dynamodb.toDynamoDBJson($ctx.identity.sub)
-            }
+          "version" : "2017-02-28",
+          "operation" : "GetItem",
+          "key" : {
+            "slug": $util.dynamodb.toDynamoDBJson($ctx.args.slug),
+            "userId": $util.dynamodb.toDynamoDBJson($ctx.identity.sub)
+          }
         }
       ResponseMappingTemplate: |
         $util.toJson($ctx.result)
